@@ -1,0 +1,104 @@
+---
+title: "Retraining the ubi-site score"
+output: html_document
+---
+
+# Background
+This shows how to retrain the model using the functions in `scripts/model_training.R`,
+`scripts/feature_processing.R`, and `scripts/pipeline.R`.
+
+# Initialise
+```{r}
+source("scripts/model_training.R")
+source("scripts/feature_processing.R")
+source("scripts/pipeline.R")
+```
+
+# Load data
+`datFeats` holds the processed features for every candidate site (rownames
+`"<uniprot>_<site>"`), built from the raw per-lysine features in `allLys_HsRevi_feats.csv`
+by `prepareFeatures()`. `trainSites` is a list of the form `list(pos = ..., neg = ...)`,
+giving the rownames of `datFeats` to use as the positive/negative training sites, built by
+`loadDefaultTrainSites()` from the sites originally used to train the model.
+```{r}
+datFeats <- prepareFeatures("data")
+trainSites <- loadDefaultTrainSites("data")
+```
+
+# Example 1: retrain with all the defaults
+```{r}
+resLst <- runTrainingPipeline(
+  datFeats = datFeats,
+  trainSites = trainSites
+)
+
+resLst$AUCdf          # AUC of each train-test split, on its own held-out test set
+resLst$modsPredsTest_df  # the underlying test-set predictions behind AUCdf
+resLst$allPredsDf     # median predicted score per site in datFeats, across all splits
+```
+
+# Example 2: custom training sites and repeated splits
+Supply your own positive/negative training sites (as rownames of `datFeats`), and generate
+5 repeats of the 5-fold split instead of 1.
+```{r}
+myTrainSites <- list(
+  pos = trainSites$pos,
+  neg = trainSites$neg[1:5000]
+)
+
+resLst_custom <- runTrainingPipeline(
+  datFeats = datFeats,
+  trainSites = myTrainSites,
+  numReps = 5
+)
+```
+
+# Example 3: prepareFeatures() with custom sites
+`sites` can be any vector of `uniprot_site` values representing lysines in the reviewed human proteome, not just the ones already used for
+training - e.g. adding a couple of extra sites of interest alongside `trainSites`:
+```{r}
+datFeats_extraSites <- prepareFeatures(
+  "data",
+  sites = c("Q9NVI1_K523", "Q9BXW9_K561", trainSites$pos, trainSites$neg)
+)
+```
+
+# Example 4: supplying your own train-test splits
+If you'd rather build the train-test splits yourself (e.g. a different splitting
+strategy), build a training set with `buildTrainingData()`, construct a list of
+`list(trainDat = ..., testDat = ...)` splits from it, and pass that in directly.
+```{r}
+trainDat <- buildTrainingData(datFeats = datFeats, posSites = myTrainSites$pos, negSites = myTrainSites$neg)
+myCustomSplits <- makeFoldsProtstrat(seed = 1, k = 5, data = trainDat)  # or your own splitting logic
+
+resLst_customSplits <- runTrainingPipeline(
+  datFeats = datFeats,
+  trainSites = myTrainSites,
+  customSplits = myCustomSplits
+)
+```
+
+# Example 5: customising feature processing
+`prepareFeatures()` runs: subset to `sites` (default: `loadDefaultPredSites()`) -> subset to
+`features` -> mean-impute `meanImputeFeats` (default `FinalBoxProcNum`) -> drop sites with
+any remaining missing feature values -> log-transform `logFeats` -> center and scale.
+
+Mean-impute an extra feature:
+```{r}
+datFeats_customImpute <- prepareFeatures("data", meanImputeFeats = c("FinalBoxProcNum", "NSP_rsa"))
+```
+
+Restrict processing to a chosen set of sites, e.g. only the sites used for training:
+```{r}
+datFeats_subset <- prepareFeatures("data", sites = c(trainSites$pos, trainSites$neg))
+```
+
+Select only a subset of features:
+```{r}
+datFeats_subsetFeats <- prepareFeatures("data", features = c("FinalBoxProcNum", "NSP_rsa", "PRIDE_gold"))
+```
+
+Skip processing entirely and get the raw features (still subsetted to `features`/`sites`):
+```{r}
+datFeats_raw <- prepareFeatures("data", raw = TRUE)
+```
